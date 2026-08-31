@@ -1,14 +1,18 @@
 {
   "manifest_version": 3,
   "name": "PolyCopy",
-  "version": "1.4",
+  "version": "1.5",
   "description": "Highlight multiple blocks of text to copy them all at once with clean style.",
   "author": "lncln",
   "permissions": [
     "storage",
     "clipboardWrite",
     "clipboardRead",
-    "offscreen"
+    "offscreen",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"

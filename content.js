@@ -113,6 +113,8 @@
       content = '<polyline points="20 6 9 17 4 12"></polyline>';
     } else if (type === "close") {
       content = '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>';
+    } else if (type === "image") {
+      content = '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>';
     }
     
     const className = type === "checkmark" ? "checkmark-svg" : "main-svg";
@@ -164,6 +166,8 @@
       } else {
         didDrag = true;
       }
+
+      if (!didDrag) return;
 
       let newLeft = initialLeft + deltaX;
       let newTop = initialTop + deltaY;
@@ -581,34 +585,78 @@
    * @param {string} [pText=""] - Saved plain text snippet.
    * @param {string} [hText=""] - Saved HTML snippet.
    */
+  const dataUrlToBlob = async (dataUrl) => {
+    try {
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+      if (blob.type === "image/png") {
+        return blob;
+      }
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob(resolve, "image/png");
+          } catch (err) {
+            reject(err);
+          }
+        };
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+    } catch (e) {
+      console.error("[Content] Failed to convert dataUrl to PNG blob:", e);
+      return null;
+    }
+  };
+
   const triggerClipboardUpdate = (newList, isRefreshAction = false, x = 0, y = 0, pText = "", hText = "") => {
     if (newList.length === 0) {
       clipboardBuffer = { plain: "", html: "" };
+    } else if (newList.length === 1 && newList[0].type === "image") {
+      clipboardBuffer.plain = "";
+      clipboardBuffer.html = newList[0].html;
     } else {
       const linksOnly = newList.filter(item => item.type === "link");
-      const textsOnly = newList.filter(item => item.type === "text" || item.type === "markdown");
+      const textsOnly = newList.filter(item => item.type === "text" || item.type === "markdown" || item.type === "image");
       const sortedList = [...linksOnly, ...textsOnly];
 
       clipboardBuffer.plain = sortedList.map(item => item.plain).join("\n");
       clipboardBuffer.html = sortedList.map(item => item.html).join("<br>");
     }
 
-    const writeToClipboard = (callback) => {
-      // Modern Clipboard API
-      if (navigator.clipboard && window.isSecureContext) {
-        const blobPlain = new Blob([clipboardBuffer.plain], { type: "text/plain" });
-        const blobHtml = new Blob([clipboardBuffer.html], { type: "text/html" });
-        const clipboardItem = new ClipboardItem({
-          "text/plain": blobPlain,
-          "text/html": blobHtml
-        });
+    const hasImage = newList.some(item => item.type === "image");
 
-        navigator.clipboard.write([clipboardItem])
-          .then(callback)
-          .catch((err) => {
-            console.debug("[Content] Modern Clipboard API failed, running fallback:", err);
-            writeUsingExecCommand(callback);
-          });
+    const writeToClipboard = async (callback) => {
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          const clipboardItems = {};
+          clipboardItems["text/plain"] = new Blob([clipboardBuffer.plain], { type: "text/plain" });
+          clipboardItems["text/html"] = new Blob([clipboardBuffer.html], { type: "text/html" });
+
+          if (hasImage) {
+            const imageItem = newList.find(item => item.type === "image");
+            if (imageItem && imageItem.imageBase64) {
+              const imageBlob = await dataUrlToBlob(imageItem.imageBase64);
+              if (imageBlob) {
+                clipboardItems["image/png"] = imageBlob;
+              }
+            }
+          }
+
+          await navigator.clipboard.write([
+            new ClipboardItem(clipboardItems)
+          ]);
+          if (callback) callback();
+        } catch (err) {
+          console.debug("[Content] Modern Clipboard API failed, running fallback:", err);
+          writeUsingExecCommand(callback);
+        }
       } else {
         writeUsingExecCommand(callback);
       }
@@ -631,6 +679,7 @@
       if (!chrome.runtime?.id) return;
       chrome.storage.local.set({ textList: newList }, () => {
         if (chrome.runtime.lastError) return;
+        syncFloatingButtonImageState(newList);
         if (isRefreshAction) {
           removeTooltip();
           showTooltip(x, y, pText, hText, newList);
@@ -705,10 +754,15 @@
             .trim();
           
           const words = cleanText.split(/\s+/).filter(Boolean);
-          const displayWords = words.slice(0, 2).join(" ") || "";
-          const hasMore = words.length > 2;
+          let displayWords = words.slice(0, 2).join(" ") || "";
+          let hasMore = words.length > 2;
+
+          if (displayWords.length > 15) {
+            displayWords = displayWords.slice(0, 15);
+            hasMore = true;
+          }
           
-          const prefix = item.type === "link" ? "🔗 " : (item.type === "markdown" ? "Ⓜ️ " : "📝 ");
+          const prefix = item.type === "link" ? "🔗 " : (item.type === "markdown" ? "Ⓜ️ " : (item.type === "image" ? "🖼️ " : "📝 "));
 
           return el("div", {
             className: `tooltip-list-item${item.type === "link" ? " type-link" : ""}`
@@ -912,6 +966,20 @@
       }
     }, [createSvgIcon("text", 13), createSvgIcon("checkmark", 13)]);
 
+    const btnCopyImage = el("button", {
+      id: "smart-markdown-copy-image-btn",
+      title: "Copy Image File only (for ChatGPT/Gemini upload)",
+      onclick: (e) => {
+        e.stopPropagation();
+        if (didDragActive) {
+          didDragActive = false;
+          return;
+        }
+        handleCopyImageOnlyClick();
+        collapseContainer();
+      }
+    }, [createSvgIcon("image", 13), createSvgIcon("checkmark", 13)]);
+
     const btnClear = el("button", {
       id: "smart-markdown-clear-btn",
       title: "Clear Clipboard Buffer",
@@ -929,7 +997,7 @@
     const container = el("div", {
       id: "smart-markdown-floating-container",
       className: "side-right"
-    }, [btnPaste, btnPastePlain, btnClear]);
+    }, [btnPaste, btnPastePlain, btnCopyImage, btnClear]);
 
     // Reset didDragActive state and remove force-stacked on mousedown
     container.addEventListener("mousedown", (e) => {
@@ -1117,9 +1185,43 @@
       }, 1000);
     };
 
+    /**
+     * Copies the image item from textList directly to clipboard as binary PNG.
+     */
+    const handleCopyImageOnlyClick = () => {
+      if (!isExtensionValid()) return;
+      chrome.storage.local.get({ textList: [] }, async (data) => {
+        if (chrome.runtime.lastError) return;
+        const imageItem = data.textList.find(item => item.type === "image");
+        if (imageItem && imageItem.imageBase64) {
+          try {
+            const blob = await dataUrlToBlob(imageItem.imageBase64);
+            if (blob) {
+              await navigator.clipboard.write([
+                new ClipboardItem({ "image/png": blob })
+              ]);
+              showCopyImageSuccessState();
+            }
+          } catch (err) {
+            console.error("[Floating Button] Failed to copy image only:", err);
+          }
+        }
+      });
+    };
+
+    /**
+     * Shows visual tick animation on image copy success.
+     */
+    const showCopyImageSuccessState = () => {
+      btnCopyImage.classList.add("success");
+      setTimeout(() => {
+        btnCopyImage.classList.remove("success");
+      }, 1000);
+    };
+
     // Bind dragging triggers to container
     floatBtnDragCleanup = makeElementDraggable(container, {
-      dragThreshold: 5,
+      dragThreshold: 10,
       paddingX: 10,
       paddingYTop: 10,
       paddingYBottom: 10,
@@ -1159,11 +1261,36 @@
     const injectBtn = () => {
       if (document.body) {
         document.body.appendChild(container);
+        if (isExtensionValid()) {
+          chrome.storage.local.get({ textList: [] }, (data) => {
+            if (chrome.runtime.lastError) return;
+            syncFloatingButtonImageState(data.textList);
+          });
+        }
       } else {
         setTimeout(injectBtn, 50);
       }
     };
     injectBtn();
+  };
+
+  /**
+   * Syncs the image-presence state class on the floating panel container.
+   */
+  const syncFloatingButtonImageState = (list) => {
+    const btn = document.getElementById("smart-markdown-copy-image-btn");
+    if (!btn) return;
+
+    const hasImage = list && list.some(item => item.type === "image");
+    if (hasImage) {
+      btn.style.opacity = "1";
+      btn.style.pointerEvents = "auto";
+      btn.title = "Copy Image File only (for ChatGPT/Gemini upload)";
+    } else {
+      btn.style.opacity = "0.35";
+      btn.style.pointerEvents = "none";
+      btn.title = "Copy Image (No image in queue)";
+    }
   };
 
   /**
@@ -1175,7 +1302,8 @@
     chrome.storage.local.get({
       enabled: true,
       mode: "global",
-      activeTabIds: {}
+      activeTabIds: {},
+      textList: []
     }, (data) => {
       if (chrome.runtime.lastError) return;
       const container = document.getElementById("smart-markdown-floating-container");
@@ -1214,6 +1342,7 @@
         } else {
           container.style.display = "";
         }
+        syncFloatingButtonImageState(data.textList);
       } else {
         if (container) {
           container.style.display = "none";
@@ -1396,6 +1525,9 @@
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (!isExtensionValid()) return;
     if (namespace === "local") {
+      if (changes.textList) {
+        syncFloatingButtonImageState(changes.textList.newValue);
+      }
       chrome.storage.local.get({
         enabled: true,
         mode: "global",
@@ -1446,6 +1578,22 @@
       if (window === window.top) {
         removeTooltip();
       }
+    } else if (message.action === "syncClipboard") {
+      triggerClipboardUpdate(message.newList);
+      syncFloatingButtonImageState(message.newList);
+      if (currentTooltip) {
+        const { text: selectedText, html: selectedHtml } = getComposedSelection();
+        chrome.storage.local.get({ textList: [] }, (data) => {
+          if (chrome.runtime.lastError) return;
+          const rect = currentTooltip.getBoundingClientRect();
+          const x = rect.left;
+          const y = rect.top;
+          removeTooltip();
+          showTooltip(x, y, selectedText, selectedHtml, data.textList);
+        });
+      }
+      sendResponse({ success: true });
+      return false;
     }
   });
 

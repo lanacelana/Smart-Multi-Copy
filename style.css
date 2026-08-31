@@ -175,6 +175,15 @@
   transition: all 0.2s ease;
 }
 
+.tooltip-list-item span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
 .tooltip-list-item:hover {
   border-color: rgba(223, 255, 0, 0.3);
   background-color: rgba(26, 77, 46, 0.45);
@@ -256,16 +265,18 @@
 
 #smart-markdown-floating-container:hover,
 #smart-markdown-floating-container.dragging {
-  width: 110px;
+  width: 146px;
   opacity: 1;
 }
 
 #smart-markdown-floating-container.side-left {
   transform-origin: bottom left;
+  justify-items: start;
 }
 
 #smart-markdown-floating-container.side-right {
   transform-origin: bottom right;
+  justify-items: end;
 }
 
 #smart-markdown-floating-container button {
@@ -344,9 +355,14 @@
   transform: translateX(-36px);
 }
 
+#smart-markdown-floating-container:hover #smart-markdown-copy-image-btn,
+#smart-markdown-floating-container.dragging #smart-markdown-copy-image-btn {
+  transform: translateX(-72px);
+}
+
 #smart-markdown-floating-container:hover #smart-markdown-clear-btn,
 #smart-markdown-floating-container.dragging #smart-markdown-clear-btn {
-  transform: translateX(-72px);
+  transform: translateX(-108px);
 }
 
 /* left side fans out to the right */
@@ -355,9 +371,14 @@
   transform: translateX(36px);
 }
 
+#smart-markdown-floating-container.side-left:hover #smart-markdown-copy-image-btn,
+#smart-markdown-floating-container.side-left.dragging #smart-markdown-copy-image-btn {
+  transform: translateX(72px);
+}
+
 #smart-markdown-floating-container.side-left:hover #smart-markdown-clear-btn,
 #smart-markdown-floating-container.side-left.dragging #smart-markdown-clear-btn {
-  transform: translateX(72px);
+  transform: translateX(108px);
 }
 
 #smart-markdown-floating-container button.success {
@@ -391,4 +412,23 @@
 
 #smart-markdown-floating-container button.success .checkmark-svg {
   display: block !important;
+}
+
+/* ==========================================================================
+   IMAGE COPY BUTTON STYLING
+   ========================================================================== */
+
+#smart-markdown-copy-image-btn {
+  display: flex;
+  background: rgba(26, 77, 46, 0.9) !important;
+  border: 2px solid rgba(44, 106, 67, 0.9) !important;
+  color: var(--text-light) !important;
+  z-index: 1.5 !important;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease, background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+#smart-markdown-copy-image-btn:hover {
+  background: rgba(26, 77, 46, 0.95) !important;
+  border-color: rgba(223, 255, 0, 0.4) !important;
+  color: var(--accent-gold) !important;
 }

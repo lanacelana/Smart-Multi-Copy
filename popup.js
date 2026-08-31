@@ -197,7 +197,37 @@
      * @param {Array} list - The list of queue items.
      * @param {Function} [callback] - Success callback trigger.
      */
-    const writeListToClipboard = (list, callback) => {
+    const dataUrlToBlob = async (dataUrl) => {
+      try {
+        const response = await fetch(dataUrl);
+        const blob = await response.blob();
+        if (blob.type === "image/png") {
+          return blob;
+        }
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            try {
+              const canvas = document.createElement("canvas");
+              canvas.width = img.naturalWidth;
+              canvas.height = img.naturalHeight;
+              const ctx = canvas.getContext("2d");
+              ctx.drawImage(img, 0, 0);
+              canvas.toBlob(resolve, "image/png");
+            } catch (err) {
+              reject(err);
+            }
+          };
+          img.onerror = reject;
+          img.src = dataUrl;
+        });
+      } catch (e) {
+        console.error("[Popup] Failed to convert dataUrl to PNG blob:", e);
+        return null;
+      }
+    };
+
+    const writeListToClipboard = async (list, callback) => {
       if (list.length === 0) {
         navigator.clipboard.writeText("").then(callback).catch(err => {
           console.error("[Popup] Clipboard clear error:", err);
@@ -206,25 +236,38 @@
         return;
       }
 
-      const combinedPlain = list.map(item => item.plain).join("");
-      const combinedHtml = list.map(item => item.html).join("");
+      let combinedPlain = "";
+      let combinedHtml = "";
 
-      const blobPlain = new Blob([combinedPlain], { type: "text/plain" });
-      const blobHtml = new Blob([combinedHtml], { type: "text/html" });
+      if (list.length === 1 && list[0].type === "image") {
+        combinedPlain = "";
+        combinedHtml = list[0].html;
+      } else {
+        combinedPlain = list.map(item => item.plain).join("");
+        combinedHtml = list.map(item => item.html).join("");
+      }
 
-      const clipboardData = [
-        new ClipboardItem({
-          "text/plain": blobPlain,
-          "text/html": blobHtml
-        })
-      ];
+      try {
+        const clipboardItems = {};
+        clipboardItems["text/plain"] = new Blob([combinedPlain], { type: "text/plain" });
+        clipboardItems["text/html"] = new Blob([combinedHtml], { type: "text/html" });
 
-      navigator.clipboard.write(clipboardData)
-        .then(callback)
-        .catch(err => {
-          console.error("[Popup] Clipboard write error:", err);
-          if (callback) callback();
-        });
+        const imageItem = list.find(item => item.type === "image");
+        if (imageItem && imageItem.imageBase64) {
+          const imageBlob = await dataUrlToBlob(imageItem.imageBase64);
+          if (imageBlob) {
+            clipboardItems["image/png"] = imageBlob;
+          }
+        }
+
+        await navigator.clipboard.write([
+          new ClipboardItem(clipboardItems)
+        ]);
+        if (callback) callback();
+      } catch (err) {
+        console.error("[Popup] Clipboard write error:", err);
+        if (callback) callback();
+      }
     };
 
     /**

@@ -238,26 +238,42 @@
     const path = 'offscreen.html';
     await setupOffscreenDocument(path);
 
-    try {
-      const response = await chrome.runtime.sendMessage({
-        target: 'offscreen',
-        action: 'read-clipboard'
-      });
-      
+    let response = null;
+    let lastError = null;
+    
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        response = await chrome.runtime.sendMessage({
+          target: 'offscreen',
+          action: 'read-clipboard'
+        });
+        if (response) break;
+      } catch (err) {
+        lastError = err;
+      }
+      // Wait 50ms before retrying
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+
+    if (response) {
       // Reset inactivity timer after a successful message round-trip
       resetOffscreenTimeout();
-
-      return response || { success: false, error: "No response from offscreen document" };
-    } catch (err) {
-      // Close the document immediately if an error occurs
-      await chrome.offscreen.closeDocument().catch(() => {});
-      if (offscreenTimeout) {
-        clearTimeout(offscreenTimeout);
-        offscreenTimeout = null;
-      }
-      return { success: false, error: err.message };
+      return response;
     }
+
+    // Close the document immediately if failure persists
+    await chrome.offscreen.closeDocument().catch(() => {});
+    if (offscreenTimeout) {
+      clearTimeout(offscreenTimeout);
+      offscreenTimeout = null;
+    }
+    return { 
+      success: false, 
+      error: lastError ? lastError.message : "No response from offscreen document after retries" 
+    };
   };
+
+
 
   // ==========================================
   // CROSS-SCRIPT MESSAGE DISPATCHERS
@@ -315,6 +331,7 @@
       sendResponse({ success: true });
       return false;
     }
+
 
     // Read clipboard contents using the offscreen document
     if (request.action === "readClipboard") {
@@ -404,6 +421,65 @@
   // Connection port handler for content script orphan monitoring
   chrome.runtime.onConnect.addListener((port) => {
     // Kept open to track connection liveness
+  });
+
+  // Create context menu items safely on startup
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "copy-image-to-polycopy",
+      title: "Copy Image to PolyCopy",
+      contexts: ["image"]
+    });
+  });
+
+  const fetchImageAsDataUrl = async (url) => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const buffer = await blob.arrayBuffer();
+      let binary = "";
+      const bytes = new Uint8Array(buffer);
+      const len = bytes.byteLength;
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
+      return `data:${blob.type};base64,${base64}`;
+    } catch (err) {
+      console.error("[Background] Failed to fetch and convert image:", err);
+      return null;
+    }
+  };
+
+  // Handle context menu clicks
+  chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+    if (info.menuItemId === "copy-image-to-polycopy") {
+      const imageUrl = info.srcUrl;
+      if (imageUrl) {
+        const dataUrl = await fetchImageAsDataUrl(imageUrl);
+        chrome.storage.local.get({ textList: [] }, (data) => {
+          if (chrome.runtime.lastError) return;
+          const currentList = data.textList;
+          const newItem = {
+            type: "image",
+            plain: `![image](${imageUrl})`,
+            html: `<img src="${imageUrl}" style="max-width: 100%;" />`,
+            imageUrl: imageUrl,
+            imageBase64: dataUrl
+          };
+          const newList = [newItem, ...currentList];
+          
+          chrome.storage.local.set({ textList: newList }, () => {
+            if (chrome.runtime.lastError) return;
+            if (tab && tab.id) {
+              chrome.tabs.sendMessage(tab.id, { action: "syncClipboard", newList: newList }, () => {
+                const err = chrome.runtime.lastError;
+              });
+            }
+          });
+        });
+      }
+    }
   });
 
   // Synchronize state for the currently active tab on worker startup
